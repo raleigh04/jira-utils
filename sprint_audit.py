@@ -24,6 +24,7 @@ import os
 import re
 import sys
 from base64 import b64encode
+from pathlib import Path
 from datetime import datetime, timezone
 
 try:
@@ -32,9 +33,38 @@ except ImportError:
     print("requests not installed. Run: pip3 install requests --break-system-packages")
     sys.exit(1)
 
-BASE_URL = os.environ.get("JIRA_BASE_URL", "https://raleigh-life.atlassian.net").rstrip("/")
-EMAIL = os.environ.get("JIRA_EMAIL", "raleigh.schickel@gmail.com")
-BOARD_ID = int(os.environ.get("JIRA_BOARD_ID", "1"))
+ENV_FILE = Path(os.environ.get("JIRA_ENV_FILE") or Path(__file__).with_name(".env"))
+
+
+def load_env_file(path: Path) -> None:
+    """Populate the environment from a KEY=value file. Real env vars win."""
+    if not path.is_file():
+        return
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = line.removeprefix("export ").strip()
+        key, sep, value = line.partition("=")
+        if sep:
+            os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+
+
+def env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        sys.exit(f"{name} must be an integer; got {raw!r} (from {ENV_FILE})")
+
+
+load_env_file(ENV_FILE)
+
+BASE_URL = os.environ.get("JIRA_BASE_URL", "").strip().rstrip("/")
+EMAIL = os.environ.get("JIRA_EMAIL", "").strip()
+BOARD_ID = env_int("JIRA_BOARD_ID", 1)
 
 STORY_POINT_FIELD_NAMES = ("story points", "story point estimate")
 BUG_TYPE_NAMES = ("bug",)
@@ -489,9 +519,20 @@ def main():
     parser.add_argument("--api-token", type=str, help="Jira API token (or set JIRA_API_TOKEN)")
     args = parser.parse_args()
 
+    missing = [n for n, v in (("JIRA_BASE_URL", BASE_URL), ("JIRA_EMAIL", EMAIL)) if not v]
+    if missing:
+        sys.exit(
+            f"Missing required config: {', '.join(missing)}.\n"
+            f"Set them in the environment or in {ENV_FILE} "
+            f"(see .env.example)."
+        )
+
     api_token = args.api_token or os.environ.get("JIRA_API_TOKEN")
     if not api_token:
-        sys.exit("Error: provide --api-token or set JIRA_API_TOKEN")
+        sys.exit(
+            f"Missing JIRA_API_TOKEN. Set it in the environment, in {ENV_FILE}, "
+            "or pass --api-token."
+        )
 
     jira = Jira(api_token)
 
