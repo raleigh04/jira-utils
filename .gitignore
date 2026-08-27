@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+
+# never commit credentials — the token is read from the environment or Keychain
+.env
+*.env
