@@ -14,9 +14,10 @@ Story points are read at their current value; a point value edited after the
 sprint closed is reflected here but not in Jira's own sprint report.
 
 Usage:
-    python3 sprint_audit.py --list-sprints
+    python3 sprint_audit.py                      # pick a sprint from a list
     python3 sprint_audit.py --sprint-id 1
     python3 sprint_audit.py --sprint-name "Sprint 1"
+    python3 sprint_audit.py --list-sprints       # list only, no prompt
 """
 
 import argparse
@@ -171,6 +172,46 @@ def find_done_statuses(jira: Jira) -> tuple:
 
 def list_sprints(jira: Jira) -> list:
     return jira.paginate(f"/rest/agile/1.0/board/{BOARD_ID}/sprint", "values")
+
+
+def newest_first(sprints: list) -> list:
+    """Reverse chronological. Sprints with no start date (future) sort last."""
+    dated = [s for s in sprints if s.get("startDate")]
+    undated = [s for s in sprints if not s.get("startDate")]
+    dated.sort(key=lambda s: parse_dt(s["startDate"]), reverse=True)
+    return dated + undated
+
+
+def sprint_row(sprint: dict) -> str:
+    def day(value):
+        return f"{parse_dt(value):%Y-%m-%d}" if value else "?"
+    start = day(sprint.get("startDate"))
+    finish = day(sprint.get("completeDate") or sprint.get("endDate"))
+    return (f"[{sprint['id']:>4}]  {sprint['state']:<8} {sprint['name']:<12} "
+            f"{start} to {finish}")
+
+
+def choose_sprint(sprints: list) -> dict:
+    ordered = newest_first(sprints)
+    if not ordered:
+        sys.exit(f"No sprints found on board {BOARD_ID}.")
+    print(f"\nSprints on board {BOARD_ID}, newest first:\n")
+    for position, sprint in enumerate(ordered, 1):
+        print(f"  {position:>2})  {sprint_row(sprint)}")
+    while True:
+        try:
+            answer = input(f"\nSelect a sprint [1-{len(ordered)}, "
+                           f"Enter for 1, q to quit]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            sys.exit("\nNo selection made. Use --sprint-id or --sprint-name "
+                     "to run without the prompt.")
+        if answer.lower() in ("q", "quit", "exit"):
+            sys.exit(0)
+        if not answer:
+            return ordered[0]
+        if answer.isdigit() and 1 <= int(answer) <= len(ordered):
+            return ordered[int(answer) - 1]
+        print(f"  '{answer}' is not one of 1-{len(ordered)}.")
 
 
 def get_sprint(jira: Jira, sprint_id: int) -> dict:
@@ -513,7 +554,8 @@ def audit_sprint(jira: Jira, sprint: dict):
 
 def main():
     parser = argparse.ArgumentParser(description="Jira sprint planned vs unplanned audit")
-    parser.add_argument("--list-sprints", action="store_true", help="List sprints on the board")
+    parser.add_argument("--list-sprints", action="store_true",
+                        help="List sprints and exit, without prompting")
     parser.add_argument("--sprint-id", type=int, help="Sprint ID to audit")
     parser.add_argument("--sprint-name", type=str, help="Sprint name to audit (substring match)")
     parser.add_argument("--api-token", type=str, help="Jira API token (or set JIRA_API_TOKEN)")
@@ -537,10 +579,9 @@ def main():
     jira = Jira(api_token)
 
     if args.list_sprints:
-        sprints = list_sprints(jira)
-        print(f"\nSprints on board {BOARD_ID}:")
-        for s in sorted(sprints, key=lambda s: s["id"]):
-            print(f"  [{s['id']:>4}]  {s['state']:<8}  {s['name']}")
+        print(f"\nSprints on board {BOARD_ID}, newest first:\n")
+        for sprint in newest_first(list_sprints(jira)):
+            print(f"  {sprint_row(sprint)}")
         print()
         return
 
@@ -563,7 +604,7 @@ def main():
         audit_sprint(jira, matches[0])
         return
 
-    parser.print_help()
+    audit_sprint(jira, choose_sprint(list_sprints(jira)))
 
 
 if __name__ == "__main__":
